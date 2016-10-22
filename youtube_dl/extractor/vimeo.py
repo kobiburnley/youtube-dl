@@ -355,23 +355,28 @@ class VimeoIE(VimeoBaseInfoExtractor):
         return smuggle_url(url, {'http_headers': {'Referer': referrer_url}})
 
     @staticmethod
-    def _extract_vimeo_url(url, webpage):
+    def _extract_urls(url, webpage):
+        urls = []
         # Look for embedded (iframe) Vimeo player
-        mobj = re.search(
-            r'<iframe[^>]+?src=(["\'])(?P<url>(?:https?:)?//player\.vimeo\.com/video/.+?)\1', webpage)
-        if mobj:
-            player_url = unescapeHTML(mobj.group('url'))
-            return VimeoIE._smuggle_referrer(player_url, url)
-        # Look for embedded (swf embed) Vimeo player
-        mobj = re.search(
-            r'<embed[^>]+?src="((?:https?:)?//(?:www\.)?vimeo\.com/moogaloop\.swf.+?)"', webpage)
-        if mobj:
-            return mobj.group(1)
-        # Look more for non-standard embedded Vimeo player
-        mobj = re.search(
-            r'<video[^>]+src=(?P<q1>[\'"])(?P<url>(?:https?:)?//(?:www\.)?vimeo\.com/[0-9]+)(?P=q1)', webpage)
-        if mobj:
-            return mobj.group('url')
+        for mobj in re.finditer(
+                r'<iframe[^>]+?src=(["\'])(?P<url>(?:https?:)?//player\.vimeo\.com/video/.+?)\1',
+                webpage):
+            urls.append(VimeoIE._smuggle_referrer(unescapeHTML(mobj.group('url')), url))
+        PLAIN_EMBED_RE = (
+            # Look for embedded (swf embed) Vimeo player
+            r'<embed[^>]+?src=(["\'])(?P<url>(?:https?:)?//(?:www\.)?vimeo\.com/moogaloop\.swf.+?)\1',
+            # Look more for non-standard embedded Vimeo player
+            r'<video[^>]+src=(["\'])(?P<url>(?:https?:)?//(?:www\.)?vimeo\.com/[0-9]+)\1',
+        )
+        for embed_re in PLAIN_EMBED_RE:
+            for mobj in re.finditer(embed_re, webpage):
+                urls.append(mobj.group('url'))
+        return urls
+
+    @staticmethod
+    def _extract_url(url, webpage):
+        urls = VimeoIE._extract_urls(url, webpage)
+        return urls[0] if urls else None
 
     def _verify_player_video_password(self, url, video_id):
         password = self._downloader.params.get('videopassword')
@@ -832,6 +837,7 @@ class VimeoReviewIE(VimeoBaseInfoExtractor):
         'params': {
             'videopassword': 'holygrail',
         },
+        'skip': 'video gone',
     }]
 
     def _real_initialize(self):
@@ -839,9 +845,10 @@ class VimeoReviewIE(VimeoBaseInfoExtractor):
 
     def _get_config_url(self, webpage_url, video_id, video_password_verified=False):
         webpage = self._download_webpage(webpage_url, video_id)
-        config_url = self._html_search_regex(
-            r'data-config-url="([^"]+)"', webpage, 'config URL',
-            default=NO_DEFAULT if video_password_verified else None)
+        data = self._parse_json(self._search_regex(
+            r'window\s*=\s*_extend\(window,\s*({.+?})\);', webpage, 'data',
+            default=NO_DEFAULT if video_password_verified else '{}'), video_id)
+        config_url = data.get('vimeo_esi', {}).get('config', {}).get('configUrl')
         if config_url is None:
             self._verify_video_password(webpage_url, video_id, webpage)
             config_url = self._get_config_url(

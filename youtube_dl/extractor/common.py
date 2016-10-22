@@ -21,6 +21,7 @@ from ..compat import (
     compat_os_name,
     compat_str,
     compat_urllib_error,
+    compat_urllib_parse_unquote,
     compat_urllib_parse_urlencode,
     compat_urllib_request,
     compat_urlparse,
@@ -234,7 +235,7 @@ class InfoExtractor(object):
     chapter_id:     Id of the chapter the video belongs to, as a unicode string.
 
     The following fields should only be used when the video is an episode of some
-    series or programme:
+    series, programme or podcast:
 
     series:         Title of the series or programme the video episode belongs to.
     season:         Title of the season the video episode belongs to.
@@ -1099,6 +1100,13 @@ class InfoExtractor(object):
             manifest, ['{http://ns.adobe.com/f4m/1.0}bootstrapInfo', '{http://ns.adobe.com/f4m/2.0}bootstrapInfo'],
             'bootstrap info', default=None)
 
+        vcodec = None
+        mime_type = xpath_text(
+            manifest, ['{http://ns.adobe.com/f4m/1.0}mimeType', '{http://ns.adobe.com/f4m/2.0}mimeType'],
+            'base URL', default=None)
+        if mime_type and mime_type.startswith('audio/'):
+            vcodec = 'none'
+
         for i, media_el in enumerate(media_nodes):
             tbr = int_or_none(media_el.attrib.get('bitrate'))
             width = int_or_none(media_el.attrib.get('width'))
@@ -1139,6 +1147,7 @@ class InfoExtractor(object):
                             'width': f.get('width') or width,
                             'height': f.get('height') or height,
                             'format_id': f.get('format_id') if not tbr else format_id,
+                            'vcodec': vcodec,
                         })
                     formats.extend(f4m_formats)
                     continue
@@ -1155,6 +1164,7 @@ class InfoExtractor(object):
                 'tbr': tbr,
                 'width': width,
                 'height': height,
+                'vcodec': vcodec,
                 'preference': preference,
             })
         return formats
@@ -1801,7 +1811,11 @@ class InfoExtractor(object):
             return is_plain_url, formats
 
         entries = []
-        for media_tag, media_type, media_content in re.findall(r'(?s)(<(?P<tag>video|audio)[^>]*>)(.*?)</(?P=tag)>', webpage):
+        media_tags = [(media_tag, media_type, '')
+                      for media_tag, media_type
+                      in re.findall(r'(?s)(<(video|audio)[^>]*/>)', webpage)]
+        media_tags.extend(re.findall(r'(?s)(<(?P<tag>video|audio)[^>]*>)(.*?)</(?P=tag)>', webpage))
+        for media_tag, media_type, media_content in media_tags:
             media_info = {
                 'formats': [],
                 'subtitles': {},
@@ -1870,11 +1884,11 @@ class InfoExtractor(object):
             formats.extend(self._extract_f4m_formats(
                 http_base_url + '/manifest.f4m',
                 video_id, f4m_id='hds', fatal=False))
+        if 'dash' not in skip_protocols:
+            formats.extend(self._extract_mpd_formats(
+                http_base_url + '/manifest.mpd',
+                video_id, mpd_id='dash', fatal=False))
         if re.search(r'(?:/smil:|\.smil)', url_base):
-            if 'dash' not in skip_protocols:
-                formats.extend(self._extract_mpd_formats(
-                    http_base_url + '/manifest.mpd',
-                    video_id, mpd_id='dash', fatal=False))
             if 'smil' not in skip_protocols:
                 rtmp_formats = self._extract_smil_formats(
                     http_base_url + '/jwplayer.smil',
@@ -2019,6 +2033,12 @@ class InfoExtractor(object):
         if geo_verification_proxy:
             headers['Ytdl-request-proxy'] = geo_verification_proxy
         return headers
+
+    def _generic_id(self, url):
+        return compat_urllib_parse_unquote(os.path.splitext(url.rstrip('/').split('/')[-1])[0])
+
+    def _generic_title(self, url):
+        return compat_urllib_parse_unquote(os.path.splitext(url_basename(url))[0])
 
 
 class SearchInfoExtractor(InfoExtractor):
